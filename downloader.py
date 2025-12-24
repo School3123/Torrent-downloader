@@ -1,181 +1,77 @@
-import sys
-import os
-import time
-import requests
-import libtorrent as lt
-from urllib.parse import urlparse, unquote
+# 📖 使い方ガイド (Usage Guide)
 
-# 保存先フォルダの設定
-SAVE_PATH = './downloads'
+GitHub Codespaces 上でのツールの操作手順まとめです。
 
-def get_filename_from_cd(cd):
-    """Content-Dispositionヘッダーからファイル名を取得"""
-    if not cd:
-        return None
-    fname = None
-    if 'filename=' in cd:
-        try:
-            fname = cd.split('filename=')[1].strip('"\'')
-        except:
-            pass
-    return fname
+---
 
-def download_http(url):
-    """普通のURL（直リンク）からのダウンロード"""
-    print(f"🔗 HTTP接続を開始: {url}")
-    
-    # ブラウザのふりをするためのヘッダー
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    
-    try:
-        with requests.get(url, stream=True, headers=headers) as r:
-            r.raise_for_status()
-            
-            filename = get_filename_from_cd(r.headers.get('content-disposition'))
-            if not filename:
-                filename = os.path.basename(urlparse(url).path)
-            if not filename or len(filename) < 2:
-                filename = "downloaded_file.dat"
-            
-            if not os.path.exists(SAVE_PATH):
-                os.makedirs(SAVE_PATH)
-            
-            full_path = os.path.join(SAVE_PATH, unquote(filename))
-            total_length = r.headers.get('content-length')
+## 1. 開始時のセットアップ (毎回必要)
 
-            print(f"📥 ダウンロード開始: {filename}")
+Codespaces を起動または再起動した際は、まず以下のコマンドをターミナルで実行してライブラリを準備してください。
 
-            with open(full_path, 'wb') as f:
-                if total_length is None or int(total_length) == 0:
-                    # サイズ不明の場合はそのまま書き込む
-                    f.write(r.content)
-                else:
-                    dl = 0
-                    total_length = int(total_length)
-                    for data in r.iter_content(chunk_size=8192):
-                        dl += len(data)
-                        f.write(data)
-                        
-                        # ゼロ除算防止
-                        if total_length > 0:
-                            done = int(50 * dl / total_length)
-                            percent = (dl / total_length) * 100
-                            sys.stdout.write(f"\r[{'=' * done}{' ' * (50-done)}] {percent:.2f}%")
-                            sys.stdout.flush()
-            
-            print(f"\n✅ 完了: {full_path}")
+```bash
+sudo apt-get update
+sudo apt-get install -y python3-libtorrent python3-requests python3-flask
+```
 
-    except Exception as e:
-        print(f"\n❌ エラー: {e}")
+---
 
-def download_torrent_session(handle):
-    """Torrentのダウンロードループ処理"""
-    print(f"⏳ メタデータを取得中... (最大60秒待機)")
-    
-    timeout = 0
-    while not handle.has_metadata():
-        time.sleep(1)
-        timeout += 1
-        if timeout % 10 == 0:
-            print(f"   ...待機中 ({timeout}秒経過)")
-        if timeout > 60:
-            print("\n⚠️ タイムアウト: メタデータの取得に失敗しました。ピアが見つからない可能性があります。")
-            return
+## 2. ファイルをダウンロードする (`downloader.py`)
 
-    info = handle.get_torrent_info()
-    print(f"📥 Torrent開始: {info.name()}")
+**⚠️ 重要:**
+実行時は必ず **`/usr/bin/python3`** を使用してください。単なる `python` ではエラーになります。
 
-    while not handle.is_seed():
-        s = handle.status()
-        progress = s.progress * 100
-        
-        state_str = ['Queued', 'Check', 'DL Meta', 'DL', 'Done', 'Seed', 'Alloc']
-        state = state_str[s.state] if s.state < len(state_str) else 'Unknown'
+### 基本構文
+```bash
+/usr/bin/python3 downloader.py "ここにリンクまたはファイルパス"
+```
 
-        sys.stdout.write(
-            f'\r[{state}] {progress:.2f}% '
-            f'(↓{s.download_rate / 1000:.1f} kB/s, '
-            f'↑{s.upload_rate / 1000:.1f} kB/s, '
-            f'Peers: {s.num_peers})'
-        )
-        sys.stdout.flush()
-        time.sleep(1)
-    
-    print("\n✅ Torrentダウンロード完了！")
+### ケース別の実行コマンド
 
-def download_torrent(source_type, source_data):
-    """Torrentダウンロード処理（Libtorrent 2.x対応版）"""
-    if not os.path.exists(SAVE_PATH):
-        os.makedirs(SAVE_PATH)
+#### 🧲 マグネットリンク (BitTorrent)
+リンクは必ずダブルクォーテーション `"` で囲んでください。
+```bash
+/usr/bin/python3 downloader.py "magnet:?xt=urn:btih:EXAMPLE_HASH..."
+```
 
-    # セッション設定
-    ses = lt.session()
-    ses.listen_on(6881, 6891)
-    
-    handle = None
+#### 🌐 Web上のファイル (HTTP/HTTPS)
+画像、ZIP、ISOファイルなどを直接ダウンロードします。
+```bash
+/usr/bin/python3 downloader.py "https://example.com/file.zip"
+```
 
-    try:
-        if source_type == 'magnet':
-            print("🧲 マグネットリンクを解析中...")
-            # 【修正点】Libtorrent 2.x用の書き方: parse_magnet_uriを使用
-            atp = lt.parse_magnet_uri(source_data)
-            atp.save_path = SAVE_PATH
-            handle = ses.add_torrent(atp)
-        
-        elif source_type == 'file':
-            print(f"📄 Torrentファイルを読み込み中: {source_data}")
-            info = lt.torrent_info(source_data)
-            
-            # 【修正点】add_torrent_paramsオブジェクトを使用
-            atp = lt.add_torrent_params()
-            atp.ti = info
-            atp.save_path = SAVE_PATH
-            handle = ses.add_torrent(atp)
+#### 📄 Web上の .torrent ファイル
+URLを指定するだけで、自動的にTorrentとして処理されます。
+```bash
+/usr/bin/python3 downloader.py "https://releases.ubuntu.com/.../ubuntu.iso.torrent"
+```
 
-        download_torrent_session(handle)
+#### 📂 手持ちの .torrent ファイル
+1. 左側のエクスプローラーに `.torrent` ファイルをドラッグ＆ドロップ。
+2. ファイル名を指定して実行。
+```bash
+/usr/bin/python3 downloader.py my_file.torrent
+```
 
-    except Exception as e:
-        print(f"\n❌ Torrentエラー: {e}")
-        print("ヒント: マグネットリンクが正しいか、またはファイルが壊れていないか確認してください。")
+---
 
-def main():
-    if len(sys.argv) < 2:
-        print("使用法: python3 downloader.py \"<リンク または ファイルパス>\"")
-        sys.exit(1)
+## 3. ファイルをPCへ保存する (`server.py`)
 
-    input_str = sys.argv[1]
+ダウンロードしたファイルを、ブラウザ経由で自分のPCに取り込みます。
 
-    # 1. マグネットリンク
-    if input_str.startswith("magnet:?"):
-        download_torrent('magnet', input_str)
+### 手順
 
-    # 2. Web上のURL (http/https)
-    elif input_str.startswith("http://") or input_str.startswith("https://"):
-        if input_str.lower().endswith(".torrent") or ".torrent?" in input_str.lower():
-            print("🌐 Web上の.torrentファイルを検出。一時ダウンロードします...")
-            try:
-                # User-Agentを追加して拒否を防ぐ
-                headers = {'User-Agent': 'Mozilla/5.0'}
-                r = requests.get(input_str, headers=headers)
-                temp_file = "temp_auto.torrent"
-                with open(temp_file, 'wb') as f:
-                    f.write(r.content)
-                download_torrent('file', temp_file)
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-            except Exception as e:
-                print(f"❌ .torrent取得エラー: {e}")
-        else:
-            download_http(input_str)
+1.  **Web UIサーバーを起動する**
+    ```bash
+    /usr/bin/python3 server.py
+    ```
 
-    # 3. ローカルファイル
-    elif os.path.isfile(input_str):
-        download_torrent('file', input_str)
-    
-    else:
-        print("❌ エラー: 指定されたファイルまたはリンクが見つかりません。")
+2.  **ブラウザで開く**
+    *   画面右下に表示される通知 **「Open in Browser」** をクリックします。
+    *   または、ターミナルの「PORTS」タブを開き、ポート `8080` の地球儀アイコンをクリックします。
 
-if __name__ == "__main__":
-    main()
+3.  **ダウンロード実行**
+    *   ファイル一覧画面が表示されます。
+    *   緑色の **「⬇ ダウンロード」** ボタンを押すと、PCへの保存が開始されます。
+
+4.  **終了する**
+    *   使い終わったらターミナルで `Ctrl + C` を押してサーバーを停止します。
