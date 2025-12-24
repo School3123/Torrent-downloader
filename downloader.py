@@ -5,7 +5,6 @@ import requests
 import libtorrent as lt
 from urllib.parse import urlparse, unquote
 
-# 保存先設定
 SAVE_PATH = './downloads'
 
 def get_filename_from_cd(cd):
@@ -42,7 +41,7 @@ def download_http(url):
         print(f"\n❌ HTTPエラー: {e}")
 
 def get_torrent_session():
-    # DeprecationWarning 対策: settings_packを使用
+    # Libtorrent 2.0対応設定
     settings = {'listen_interfaces': '0.0.0.0:6881,0.0.0.0:6891'}
     ses = lt.session(settings)
     return ses
@@ -77,20 +76,15 @@ def download_torrent(source_type, data):
         if source_type == 'magnet':
             handle = ses.add_torrent(lt.parse_magnet_uri(data))
         else:
-            # ファイルが正しいTorrent形式かチェック（重要）
             with open(data, 'rb') as f:
                 header = f.read(100)
-                # Bencodeは 'd' で始まり、HTMLは '<!DOCTYPE' や '<html' で始まる
                 if b'<!DOCTYPE' in header or b'<html' in header:
-                    print(f"\n❌ エラー: ダウンロードしたファイルはHTML（Webページ）です。")
-                    print("   リンク切れURLを指定している可能性があります。")
+                    print(f"\n❌ エラー: 指定されたファイルはHTMLです。リンク切れの可能性があります。")
                     return
-
-            info = lt.torrent_info(data) # ここでパース
+            info = lt.torrent_info(data)
             params['ti'] = info
             handle = ses.add_torrent(params)
         
-        # 保存先ディレクトリを設定（libtorrent 2.0以降の修正）
         handle.save_path = SAVE_PATH 
         download_torrent_session(ses, handle)
 
@@ -98,13 +92,15 @@ def download_torrent(source_type, data):
         print(f"\n❌ Torrentエラー: {e}")
 
 def main():
-    if len(sys.argv) < 2: return
+    if len(sys.argv) < 2:
+        print("使用法: /usr/bin/python3 downloader.py \"<URL>\"")
+        return
     input_str = sys.argv[1]
 
     if input_str.startswith("magnet:?"):
         download_torrent('magnet', input_str)
     elif input_str.startswith("http"):
-        if ".torrent" in input_str.lower():
+        if ".torrent" in input_str.lower() and "?" not in input_str:
             print("🌐 Web上の.torrentを取得中...")
             try:
                 r = requests.get(input_str, headers={'User-Agent': 'Mozilla/5.0'})
