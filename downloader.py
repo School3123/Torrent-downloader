@@ -19,6 +19,7 @@ def get_filename_from_cd(cd):
 def download_http(url):
     """HTTP/HTTPS ダイレクトダウンロード"""
     print(f"🔗 HTTP接続を開始: {url}")
+    # User-Agentを偽装して403エラーを防ぐ
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     
     try:
@@ -45,6 +46,7 @@ def download_http(url):
                     for data in r.iter_content(chunk_size=8192):
                         dl += len(data)
                         f.write(data)
+                        # プログレスバー表示
                         done = int(50 * dl / total)
                         percent = (dl / total) * 100
                         sys.stdout.write(f"\r[{'=' * done}{' ' * (50-done)}] {percent:.2f}%")
@@ -55,11 +57,11 @@ def download_http(url):
         print(f"\n❌ HTTPエラー: {e}")
 
 def get_torrent_session():
-    """Libtorrent 2.x向けセッション設定 (DHT有効化)"""
+    """Libtorrentセッション設定（DHT有効化で接続成功率アップ）"""
     settings = {
-        'listen_interfaces': '0.0.0.0:6881,0.0.0.0:6891',
-        'enable_dht': True,  # DHT有効化 (重要)
-        'enable_lsd': True,  # ローカルピア探索
+        'listen_interfaces': '0.0.0.0:6881,0.0.0.0:6891', # ポート設定
+        'enable_dht': True,  # DHTを有効化（重要）
+        'enable_lsd': True,  # ローカル探索
         'dht_bootstrap_nodes': 'router.bittorrent.com:6881,router.utorrent.com:6881',
     }
     ses = lt.session(settings)
@@ -74,7 +76,6 @@ def download_torrent_session(ses, handle):
         timeout += 1
         if timeout > 60:
             print("\n⚠️ タイムアウト: マグネットリンクのメタデータ取得に失敗しました。")
-            print("   ピアが見つからないか、ネットワーク制限の可能性があります。")
             return
 
     info = handle.get_torrent_info()
@@ -95,7 +96,7 @@ def download_torrent_session(ses, handle):
         sys.stdout.flush()
         time.sleep(1)
     
-    print("\n✅ Torrentダウンロード完了！ (シード状態へ移行前に終了します)")
+    print("\n✅ Torrentダウンロード完了！")
 
 def download_torrent(source_type, data):
     if not os.path.exists(SAVE_PATH): os.makedirs(SAVE_PATH)
@@ -105,9 +106,10 @@ def download_torrent(source_type, data):
     try:
         if source_type == 'magnet':
             print("🧲 マグネットリンクを解析中...")
+            # 正常動作したコードと同様、parse_magnet_uriを使用
             handle = ses.add_torrent(lt.parse_magnet_uri(data))
         else:
-            # 誤ってHTMLファイルを読み込まないようにチェック
+            # HTML誤検知防止チェック
             with open(data, 'rb') as f:
                 head = f.read(20)
                 if b'<html' in head.lower() or b'<!doctype' in head.lower():
@@ -120,11 +122,13 @@ def download_torrent(source_type, data):
             params['ti'] = info
             handle = ses.add_torrent(params)
 
+        # 保存先を適用
         handle.save_path = SAVE_PATH
         download_torrent_session(ses, handle)
 
     except Exception as e:
         print(f"\n❌ Torrentエラー: {e}")
+        print("ヒント: マグネットリンクが正しいか確認してください。")
 
 def main():
     if len(sys.argv) < 2:
