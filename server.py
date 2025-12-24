@@ -1,69 +1,118 @@
-from flask import Flask, render_template_string, send_from_directory
+from flask import Flask, render_template_string, send_from_directory, redirect, url_for
 import os
+import shutil
 
 app = Flask(__name__)
 DOWNLOAD_FOLDER = './downloads'
 
+# Bootstrapを使用したモダンなUIテンプレート
 TEMPLATE = """
 <!doctype html>
 <html lang="ja">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Downloader UI</title>
+    <title>Codespaces Downloader UI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f4f4f9; }
-        h1 { color: #333; border-bottom: 2px solid #ddd; padding-bottom: 10px; }
-        .card { background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        .list-group { list-style: none; padding: 0; margin: 0; }
-        .list-item { padding: 15px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
-        .btn { background-color: #28a745; color: white; padding: 8px 16px; text-decoration: none; border-radius: 5px; }
-        .btn:hover { background-color: #218838; }
+        body { background-color: #f8f9fa; padding-top: 20px; }
+        .file-icon { font-size: 1.2em; margin-right: 10px; }
+        .disk-info { font-size: 0.9em; color: #6c757d; margin-bottom: 20px; }
     </style>
 </head>
 <body>
-    <h1>📂 ダウンロード済みファイル</h1>
-    <div class="card">
-        <ul class="list-group">
-            {% for file in files %}
-            <li class="list-item">
-                <span style="font-weight:bold;">{{ file.name }}</span>
-                <div style="display:flex; gap:15px; align-items:center;">
-                    <span style="color:#666; font-size:0.9em;">{{ file.size }}</span>
-                    <a href="/download/{{ file.name }}" class="btn">⬇ ダウンロード</a>
+<div class="container">
+    <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+            <h4 class="mb-0">📂 ダウンロード済みファイル</h4>
+            <a href="/" class="btn btn-sm btn-light">更新</a>
+        </div>
+        <div class="card-body">
+            <div class="disk-info text-end">
+                ディスク残り容量: <strong>{{ free_space }}</strong>
+            </div>
+
+            {% if files %}
+            <div class="list-group">
+                {% for file in files %}
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                    <div class="text-truncate me-3">
+                        <span class="fw-bold">{{ file.name }}</span>
+                        <br>
+                        <small class="text-muted">{{ file.size }}</small>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <a href="/download/{{ file.name }}" class="btn btn-success btn-sm text-nowrap">
+                            ⬇ ダウンロード
+                        </a>
+                        <a href="/delete/{{ file.name }}" class="btn btn-outline-danger btn-sm text-nowrap" onclick="return confirm('本当に削除しますか？');">
+                            🗑 削除
+                        </a>
+                    </div>
                 </div>
-            </li>
+                {% endfor %}
+            </div>
             {% else %}
-            <li class="list-item" style="justify-content:center; color:#888;">ファイルはありません</li>
-            {% endfor %}
-        </ul>
+            <div class="alert alert-secondary text-center" role="alert">
+                ファイルはまだありません。<br>
+                <code>downloader.py</code> を実行してファイルをダウンロードしてください。
+            </div>
+            {% endif %}
+        </div>
     </div>
+</div>
 </body>
 </html>
 """
 
-def get_readable_size(size):
+def get_readable_size(size_in_bytes):
     for unit in ['B', 'KB', 'MB', 'GB']:
-        if size < 1024: return f"{size:.2f} {unit}"
-        size /= 1024
-    return f"{size:.2f} TB"
+        if size_in_bytes < 1024:
+            return f"{size_in_bytes:.2f} {unit}"
+        size_in_bytes /= 1024
+    return f"{size_in_bytes:.2f} TB"
 
 @app.route('/')
 def index():
-    if not os.path.exists(DOWNLOAD_FOLDER): os.makedirs(DOWNLOAD_FOLDER)
+    if not os.path.exists(DOWNLOAD_FOLDER):
+        os.makedirs(DOWNLOAD_FOLDER)
+    
+    # ディスク容量取得
+    total, used, free = shutil.disk_usage(DOWNLOAD_FOLDER)
+    free_space = get_readable_size(free)
+
     files = []
     try:
-        for f in os.listdir(DOWNLOAD_FOLDER):
-            fp = os.path.join(DOWNLOAD_FOLDER, f)
-            if os.path.isfile(fp):
-                files.append({'name': f, 'size': get_readable_size(os.path.getsize(fp))})
-    except: pass
-    return render_template_string(TEMPLATE, files=files)
+        file_list = os.listdir(DOWNLOAD_FOLDER)
+        file_list.sort() # 名前順
+        for filename in file_list:
+            filepath = os.path.join(DOWNLOAD_FOLDER, filename)
+            if os.path.isfile(filepath):
+                size = os.path.getsize(filepath)
+                files.append({
+                    'name': filename,
+                    'size': get_readable_size(size)
+                })
+    except Exception as e:
+        return f"エラー: {e}"
+
+    return render_template_string(TEMPLATE, files=files, free_space=free_space)
 
 @app.route('/download/<path:filename>')
 def download_file(filename):
     return send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
 
+@app.route('/delete/<path:filename>')
+def delete_file(filename):
+    """ファイルを削除する機能"""
+    filepath = os.path.join(DOWNLOAD_FOLDER, filename)
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+    except Exception as e:
+        return f"削除エラー: {e}"
+    return redirect(url_for('index'))
+
 if __name__ == '__main__':
-    print("Web UI起動: 右下のポップアップからブラウザを開いてください")
+    print("🚀 Web UI起動: 右下のポップアップからブラウザを開いてください")
     app.run(host='0.0.0.0', port=8080)
