@@ -5,22 +5,29 @@ import requests
 import libtorrent as lt
 from urllib.parse import urlparse, unquote
 
-# 保存先設定
+# 保存先フォルダの設定
 SAVE_PATH = './downloads'
 
 def get_filename_from_cd(cd):
     """Content-Dispositionヘッダーからファイル名を取得"""
-    if not cd: return None
+    if not cd:
+        return None
+    fname = None
     if 'filename=' in cd:
-        try: return cd.split('filename=')[1].strip('"\'')
-        except: pass
-    return None
+        try:
+            fname = cd.split('filename=')[1].strip('"\'')
+        except:
+            pass
+    return fname
 
 def download_http(url):
-    """HTTP/HTTPS ダイレクトダウンロード"""
+    """普通のURL（直リンク）からのダウンロード"""
     print(f"🔗 HTTP接続を開始: {url}")
-    # User-Agentを偽装して403エラーを防ぐ
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
+    # ブラウザのふりをするためのヘッダー
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
     
     try:
         with requests.get(url, stream=True, headers=headers) as r:
@@ -32,65 +39,65 @@ def download_http(url):
             if not filename or len(filename) < 2:
                 filename = "downloaded_file.dat"
             
-            if not os.path.exists(SAVE_PATH): os.makedirs(SAVE_PATH)
+            if not os.path.exists(SAVE_PATH):
+                os.makedirs(SAVE_PATH)
+            
             full_path = os.path.join(SAVE_PATH, unquote(filename))
-            total = int(r.headers.get('content-length', 0))
+            total_length = r.headers.get('content-length')
 
             print(f"📥 ダウンロード開始: {filename}")
-            
+
             with open(full_path, 'wb') as f:
-                if total == 0:
+                if total_length is None or int(total_length) == 0:
+                    # サイズ不明の場合はそのまま書き込む
                     f.write(r.content)
                 else:
                     dl = 0
+                    total_length = int(total_length)
                     for data in r.iter_content(chunk_size=8192):
                         dl += len(data)
                         f.write(data)
-                        # プログレスバー表示
-                        done = int(50 * dl / total)
-                        percent = (dl / total) * 100
-                        sys.stdout.write(f"\r[{'=' * done}{' ' * (50-done)}] {percent:.2f}%")
-                        sys.stdout.flush()
-            print(f"\n✅ 完了: {full_path}")
+                        
+                        # ゼロ除算防止
+                        if total_length > 0:
+                            done = int(50 * dl / total_length)
+                            percent = (dl / total_length) * 100
+                            sys.stdout.write(f"\r[{'=' * done}{' ' * (50-done)}] {percent:.2f}%")
+                            sys.stdout.flush()
             
+            print(f"\n✅ 完了: {full_path}")
+
     except Exception as e:
-        print(f"\n❌ HTTPエラー: {e}")
+        print(f"\n❌ エラー: {e}")
 
-def get_torrent_session():
-    """Libtorrentセッション設定（DHT有効化で接続成功率アップ）"""
-    settings = {
-        'listen_interfaces': '0.0.0.0:6881,0.0.0.0:6891', # ポート設定
-        'enable_dht': True,  # DHTを有効化（重要）
-        'enable_lsd': True,  # ローカル探索
-        'dht_bootstrap_nodes': 'router.bittorrent.com:6881,router.utorrent.com:6881',
-    }
-    ses = lt.session(settings)
-    return ses
-
-def download_torrent_session(ses, handle):
-    """Torrentダウンロードループ"""
-    print(f"⏳ メタデータを取得中... (DHT有効 / 最大60秒)")
+def download_torrent_session(handle):
+    """Torrentのダウンロードループ処理"""
+    print(f"⏳ メタデータを取得中... (最大60秒待機)")
+    
     timeout = 0
     while not handle.has_metadata():
         time.sleep(1)
         timeout += 1
+        if timeout % 10 == 0:
+            print(f"   ...待機中 ({timeout}秒経過)")
         if timeout > 60:
-            print("\n⚠️ タイムアウト: マグネットリンクのメタデータ取得に失敗しました。")
+            print("\n⚠️ タイムアウト: メタデータの取得に失敗しました。ピアが見つからない可能性があります。")
             return
 
     info = handle.get_torrent_info()
     print(f"📥 Torrent開始: {info.name()}")
-    print(f"   サイズ: {info.total_size() / 1024 / 1024:.2f} MB")
 
     while not handle.is_seed():
         s = handle.status()
-        state_str = ['Queued', 'Check', 'DL Meta', 'DL', 'Done', 'Seed', 'Alloc']
-        state = state_str[s.state] if s.state < len(state_str) else 'Err'
+        progress = s.progress * 100
         
+        state_str = ['Queued', 'Check', 'DL Meta', 'DL', 'Done', 'Seed', 'Alloc']
+        state = state_str[s.state] if s.state < len(state_str) else 'Unknown'
+
         sys.stdout.write(
-            f'\r[{state}] {s.progress*100:.2f}% '
-            f'(↓{s.download_rate/1000:.1f} kB/s, '
-            f'↑{s.upload_rate/1000:.1f} kB/s, '
+            f'\r[{state}] {progress:.2f}% '
+            f'(↓{s.download_rate / 1000:.1f} kB/s, '
+            f'↑{s.upload_rate / 1000:.1f} kB/s, '
             f'Peers: {s.num_peers})'
         )
         sys.stdout.flush()
@@ -98,72 +105,75 @@ def download_torrent_session(ses, handle):
     
     print("\n✅ Torrentダウンロード完了！")
 
-def download_torrent(source_type, data):
-    if not os.path.exists(SAVE_PATH): os.makedirs(SAVE_PATH)
-    ses = get_torrent_session()
-    params = {'save_path': SAVE_PATH, 'storage_mode': lt.storage_mode_t(2)}
+def download_torrent(source_type, source_data):
+    """Torrentダウンロード処理（Libtorrent 2.x対応版）"""
+    if not os.path.exists(SAVE_PATH):
+        os.makedirs(SAVE_PATH)
+
+    # セッション設定
+    ses = lt.session()
+    ses.listen_on(6881, 6891)
+    
+    handle = None
 
     try:
         if source_type == 'magnet':
             print("🧲 マグネットリンクを解析中...")
-            # 正常動作したコードと同様、parse_magnet_uriを使用
-            handle = ses.add_torrent(lt.parse_magnet_uri(data))
-        else:
-            # HTML誤検知防止チェック
-            with open(data, 'rb') as f:
-                head = f.read(20)
-                if b'<html' in head.lower() or b'<!doctype' in head.lower():
-                    print(f"\n❌ エラー: ファイル '{data}' はTorrentファイルではなくHTML(Webページ)です。")
-                    print("   URLがリンク切れ(404)になっている可能性があります。")
-                    return
+            # 【修正点】Libtorrent 2.x用の書き方: parse_magnet_uriを使用
+            atp = lt.parse_magnet_uri(source_data)
+            atp.save_path = SAVE_PATH
+            handle = ses.add_torrent(atp)
+        
+        elif source_type == 'file':
+            print(f"📄 Torrentファイルを読み込み中: {source_data}")
+            info = lt.torrent_info(source_data)
+            
+            # 【修正点】add_torrent_paramsオブジェクトを使用
+            atp = lt.add_torrent_params()
+            atp.ti = info
+            atp.save_path = SAVE_PATH
+            handle = ses.add_torrent(atp)
 
-            print(f"📄 Torrentファイルを読み込み中: {data}")
-            info = lt.torrent_info(data)
-            params['ti'] = info
-            handle = ses.add_torrent(params)
-
-        # 保存先を適用
-        handle.save_path = SAVE_PATH
-        download_torrent_session(ses, handle)
+        download_torrent_session(handle)
 
     except Exception as e:
         print(f"\n❌ Torrentエラー: {e}")
-        print("ヒント: マグネットリンクが正しいか確認してください。")
+        print("ヒント: マグネットリンクが正しいか、またはファイルが壊れていないか確認してください。")
 
 def main():
     if len(sys.argv) < 2:
-        print("使用法: /usr/bin/python3 downloader.py \"<リンク または ファイルパス>\"")
+        print("使用法: python3 downloader.py \"<リンク または ファイルパス>\"")
         sys.exit(1)
 
     input_str = sys.argv[1]
 
+    # 1. マグネットリンク
     if input_str.startswith("magnet:?"):
         download_torrent('magnet', input_str)
-    
+
+    # 2. Web上のURL (http/https)
     elif input_str.startswith("http://") or input_str.startswith("https://"):
-        # URLに .torrent が含まれているか、末尾が .torrent の場合
-        if ".torrent" in input_str.lower() and "?" not in input_str:
+        if input_str.lower().endswith(".torrent") or ".torrent?" in input_str.lower():
             print("🌐 Web上の.torrentファイルを検出。一時ダウンロードします...")
             try:
-                r = requests.get(input_str, headers={'User-Agent': 'Mozilla/5.0'})
-                if r.status_code != 200:
-                    print(f"❌ エラー: URLにアクセスできませんでした (Status: {r.status_code})")
-                    return
-                
+                # User-Agentを追加して拒否を防ぐ
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                r = requests.get(input_str, headers=headers)
                 temp_file = "temp_auto.torrent"
                 with open(temp_file, 'wb') as f:
                     f.write(r.content)
-                
                 download_torrent('file', temp_file)
-                
-                if os.path.exists(temp_file): os.remove(temp_file)
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
             except Exception as e:
                 print(f"❌ .torrent取得エラー: {e}")
         else:
             download_http(input_str)
-            
+
+    # 3. ローカルファイル
     elif os.path.isfile(input_str):
         download_torrent('file', input_str)
+    
     else:
         print("❌ エラー: 指定されたファイルまたはリンクが見つかりません。")
 
