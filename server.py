@@ -5,30 +5,29 @@ import shutil
 app = Flask(__name__)
 DOWNLOAD_FOLDER = './downloads'
 
-# Bootstrapを使用したモダンなUIテンプレート
+# デザイン：Bootstrap CDNを使用して見やすく
 TEMPLATE = """
 <!doctype html>
 <html lang="ja">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Codespaces Downloader UI</title>
+    <title>Codespaces Downloader</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f8f9fa; padding-top: 20px; }
-        .file-icon { font-size: 1.2em; margin-right: 10px; }
-        .disk-info { font-size: 0.9em; color: #6c757d; margin-bottom: 20px; }
+        .card { box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
     </style>
 </head>
 <body>
 <div class="container">
-    <div class="card shadow-sm">
+    <div class="card">
         <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
             <h4 class="mb-0">📂 ダウンロード済みファイル</h4>
             <a href="/" class="btn btn-sm btn-light">更新</a>
         </div>
         <div class="card-body">
-            <div class="disk-info text-end">
+            <div class="text-end text-muted mb-3">
                 ディスク残り容量: <strong>{{ free_space }}</strong>
             </div>
 
@@ -43,9 +42,9 @@ TEMPLATE = """
                     </div>
                     <div class="d-flex gap-2">
                         <a href="/download/{{ file.name }}" class="btn btn-success btn-sm text-nowrap">
-                            ⬇ ダウンロード
+                            ⬇ 保存
                         </a>
-                        <a href="/delete/{{ file.name }}" class="btn btn-outline-danger btn-sm text-nowrap" onclick="return confirm('本当に削除しますか？');">
+                        <a href="/delete/{{ file.name }}" class="btn btn-outline-danger btn-sm text-nowrap" onclick="return confirm('削除しますか？');">
                             🗑 削除
                         </a>
                     </div>
@@ -53,9 +52,9 @@ TEMPLATE = """
                 {% endfor %}
             </div>
             {% else %}
-            <div class="alert alert-secondary text-center" role="alert">
-                ファイルはまだありません。<br>
-                <code>downloader.py</code> を実行してファイルをダウンロードしてください。
+            <div class="alert alert-secondary text-center">
+                ファイルはありません。<br>
+                <code>downloader.py</code> を実行してください。
             </div>
             {% endif %}
         </div>
@@ -77,14 +76,13 @@ def index():
     if not os.path.exists(DOWNLOAD_FOLDER):
         os.makedirs(DOWNLOAD_FOLDER)
     
-    # ディスク容量取得
+    # ディスク容量チェック
     total, used, free = shutil.disk_usage(DOWNLOAD_FOLDER)
-    free_space = get_readable_size(free)
-
+    
     files = []
     try:
         file_list = os.listdir(DOWNLOAD_FOLDER)
-        file_list.sort() # 名前順
+        file_list.sort()
         for filename in file_list:
             filepath = os.path.join(DOWNLOAD_FOLDER, filename)
             if os.path.isfile(filepath):
@@ -96,7 +94,7 @@ def index():
     except Exception as e:
         return f"エラー: {e}"
 
-    return render_template_string(TEMPLATE, files=files, free_space=free_space)
+    return render_template_string(TEMPLATE, files=files, free_space=get_readable_size(free))
 
 @app.route('/download/<path:filename>')
 def download_file(filename):
@@ -104,13 +102,12 @@ def download_file(filename):
 
 @app.route('/delete/<path:filename>')
 def delete_file(filename):
-    """ファイルを削除する機能"""
+    """ファイル削除機能"""
     filepath = os.path.join(DOWNLOAD_FOLDER, filename)
     try:
         if os.path.exists(filepath):
             os.remove(filepath)
-    except Exception as e:
-        return f"削除エラー: {e}"
+    except: pass
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
